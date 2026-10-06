@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Queuer — Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="brand">Queuer</div>
+      <div id="welcome" class="muted small"></div>
+    </div>
+    <button id="logoutBtn" class="btn secondary">Log out</button>
+  </header>
+
+  <main class="container">
+    <div id="message" class="message hidden"></div>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>Create a queue</h2>
+        <p class="muted">Define the fields students must provide.</p>
+
+        <form id="queueForm">
+          <label>
+            Queue name
+            <input id="queueName" type="text" placeholder="e.g. Office Hours" required>
+          </label>
+
+          <label>
+            Fields
+            <input id="queueFields" type="text" placeholder="Name, Roll No." required>
+          </label>
+
+          <label>
+            Unique field
+            <select id="uniqueField" required>
+              <option value="">Enter fields first</option>
+            </select>
+          </label>
+
+          <label>
+            Estimated minutes per person
+            <input id="waitTime" type="number" min="1" value="5" required>
+          </label>
+
+          <button class="btn primary full" type="submit">Create queue</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>How it works</h2>
+        <ol class="steps">
+          <li>Create a queue and choose its unique field.</li>
+          <li>Share the generated join link or QR code.</li>
+          <li>Students join from their phones.</li>
+          <li>Call, complete, skip, or recall entries here.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <h2>Your queues</h2>
+          <p class="muted">Select a queue to view and manage its entries.</p>
+        </div>
+        <button id="refreshBtn" class="btn secondary">Refresh</button>
+      </div>
+
+      <div id="queues" class="queue-list"></div>
+    </section>
+
+    <section id="queuePanel" class="card hidden">
+      <div class="section-heading">
+        <div>
+          <h2 id="selectedQueueName">Queue</h2>
+          <p id="selectedQueueMeta" class="muted"></p>
+        </div>
+        <button id="closePanel" class="btn secondary">Close</button>
+      </div>
+
+      <div class="share-box">
+        <div>
+          <strong>Student join link</strong>
+          <div id="joinLink" class="code-text"></div>
+        </div>
+        <div class="button-row">
+          <button id="copyLinkBtn" class="btn secondary">Copy link</button>
+          <button id="qrBtn" class="btn primary">Show QR</button>
+        </div>
+      </div>
+
+      <div id="qrArea" class="qr-area hidden">
+        <canvas id="qrCanvas"></canvas>
+      </div>
+
+      <div class="button-row" style="margin-bottom:18px">
+        <button id="callNextBtn" class="btn primary">Call next</button>
+        <button id="toggleQueueBtn" class="btn secondary">Close queue</button>
+        <span id="queueStats" class="muted small"></span>
+      </div>
+
+      <div class="wait-time-row">
+        <label>
+          Wait time per person (minutes)
+          <input id="panelWaitTime" type="number" min="1">
+        </label>
+        <button id="saveWaitTimeBtn" class="btn secondary">Save wait time</button>
+      </div>
+
+      <div class="section-heading">
+        <div>
+          <h3>Entries</h3>
+          <p class="muted">Refreshes automatically every 5 seconds.</p>
+        </div>
+        <button id="refreshEntriesBtn" class="btn secondary">Refresh entries</button>
+      </div>
+
+      <div id="entries" class="entries"></div>
+    </section>
+  </main>
+
+  <script src="/static/config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+  <script>
+    const tokenKey = QueuerConfig.TOKEN_KEY;
+    const token = localStorage.getItem(tokenKey);
+
+    if (!token) {
+      window.location.replace("/");
+    }
+
+    const state = { queue: null, queues: [] };
+
+    const message = document.getElementById("message");
+    const queueFields = document.getElementById("queueFields");
+    const uniqueField = document.getElementById("uniqueField");
+
+    function showMessage(text, type = "error") {
+      message.textContent = text;
+      message.className = "message " + type;
+    }
+
+    async function api(path, options = {}) {
+      const headers = {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${localStorage.getItem(tokenKey)}`
+      };
+
+      const response = await fetch(QueuerConfig.api(path), {
+        ...options,
+        headers
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem(tokenKey);
+        window.location.replace("/");
+        throw new Error("Session expired");
+      }
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(QueuerConfig.errorText(data, "Request failed"));
+      }
+
+      return data;
+    }
+
+    function updateUniqueFields() {
+      const fields = queueFields.value
+        .split(",")
+        .map(value => value.trim())
+        .filter(Boolean);
+
+      uniqueField.innerHTML = "";
+
+      if (!fields.length) {
+        uniqueField.innerHTML = '<option value="">Enter fields first</option>';
+        return;
+      }
+
+      fields.forEach(field => {
+        const option = document.createElement("option");
+        option.value = field;
+        option.textContent = field;
+        uniqueField.appendChild(option);
+      });
+    }
+
+    queueFields.addEventListener("input", updateUniqueFields);
+
+    async function loadMe() {
+      const me = await api("/admin/me");
+      document.getElementById("welcome").textContent =
+        `Signed in as ${me.username} · ${me.email}`;
+    }
+
+    async function loadQueues() {
+      const container = document.getElementById("queues");
+      container.innerHTML = '<div class="empty">Loading queues...</div>';
+
+      try {
+        state.queues = await api("/admin/queues");
+
+        if (!state.queues.length) {
+          container.innerHTML = '<div class="empty">No queues yet. Create your first queue above.</div>';
+          return;
+        }
+
+        container.innerHTML = state.queues.map(queue => `
+          <article class="queue-card">
+            <div>
+              <h3>${escapeHtml(queue.name)}</h3>
+              <p class="muted">${queue.fields.map(escapeHtml).join(", ")}</p>
+              <span class="badge ${queue.is_active ? "" : "closed"}">${queue.is_active ? "Open" : "Closed"}</span>
+            </div>
+            <div class="button-row">
+              <button class="btn secondary" onclick="openQueue(${queue.id})">Manage</button>
+            </div>
+          </article>
+        `).join("");
+      } catch (error) {
+        container.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function openQueue(queueId) {
+      try {
+        const queue = await api(`/admin/queues/${queueId}`);
+        state.queue = queue;
+
+        document.getElementById("queuePanel").classList.remove("hidden");
+        document.getElementById("selectedQueueName").textContent = queue.name;
+        document.getElementById("selectedQueueMeta").textContent =
+          `Required fields: ${queue.fields.join(", ")} · Unique field: ${queue.unique_field}`;
+
+        document.getElementById("panelWaitTime").value = queue.wait_time_estimate;
+        updateQueueControls();
+
+        const link = `${window.location.origin}/join?queue=${queue.id}`;
+        document.getElementById("joinLink").textContent = link;
+
+        document.getElementById("qrArea").classList.add("hidden");
+        await loadEntries();
+        document.getElementById("queuePanel").scrollIntoView({ behavior: "smooth" });
+      } catch (error) {
+        showMessage(error.message);
+      }
+    }
+
+    function entryRow(entry) {
+      const details = Object.entries(entry.data || {})
+        .map(([key, value]) => `<span><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</span>`)
+        .join("");
+
+      const actionButtons = entry.status === "waiting"
+        ? `
+          <button class="btn small-btn primary" onclick="entryAction(${entry.id}, 'call')">Call</button>
+          <button class="btn small-btn warning" onclick="entryAction(${entry.id}, 'skip')">Skip</button>
+          <button class="btn small-btn danger" onclick="entryAction(${entry.id}, 'noshow')">No-show</button>
+        `
+        : entry.status === "called"
+          ? `
+            <button class="btn small-btn primary" onclick="entryAction(${entry.id}, 'done')">Done</button>
+            <button class="btn small-btn warning" onclick="entryAction(${entry.id}, 'skip')">Skip</button>
+            <button class="btn small-btn danger" onclick="entryAction(${entry.id}, 'noshow')">No-show</button>
+          `
+          : `
+            <button class="btn small-btn secondary" onclick="entryAction(${entry.id}, 'recall')">Recall</button>
+          `;
+
+      return `
+        <article class="entry-row">
+          <div class="entry-number">#${entry.position}</div>
+          <div class="entry-main">
+            <div class="entry-details">${details}</div>
+            <div class="entry-status ${entry.status}">${entry.status}</div>
+          </div>
+          <div class="button-row entry-actions">${actionButtons}</div>
+        </article>
+      `;
+    }
+
+    async function loadEntries(silent = false) {
+      if (!state.queue) return;
+
+      const container = document.getElementById("entries");
+      if (silent !== true) container.innerHTML = '<div class="empty">Loading entries...</div>';
+
+      try {
+        const entries = await api(`/admin/queues/${state.queue.id}/entries`);
+        const active = entries.filter(e => e.status === "waiting" || e.status === "called")
+          .sort((a, b) => (a.status === "called" ? 0 : 1) - (b.status === "called" ? 0 : 1) || a.position - b.position);
+        const history = entries.filter(e => e.status !== "waiting" && e.status !== "called").reverse();
+        const calledCount = active.filter(e => e.status === "called").length;
+
+        document.getElementById("queueStats").textContent =
+          `${active.length - calledCount} waiting · ${calledCount} being served · ${history.length} finished`;
+
+        if (!entries.length) {
+          container.innerHTML = '<div class="empty">No students have joined this queue yet.</div>';
+          return;
+        }
+
+        container.innerHTML =
+          `<h3>Active (${active.length})</h3>` +
+          (active.length ? active.map(entryRow).join("") : '<div class="empty">Nobody is waiting.</div>') +
+          (history.length ? `<h3 style="margin-top:18px">History (${history.length})</h3>` + history.map(entryRow).join("") : "");
+      } catch (error) {
+        if (silent !== true) container.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function entryAction(entryId, action) {
+      try {
+        await api(`/admin/entries/${entryId}/${action}`, { method: "POST" });
+        await loadEntries();
+        showMessage(`Entry ${action} successful.`, "success");
+      } catch (error) {
+        showMessage(error.message);
+      }
+    }
+
+    document.getElementById("queueForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const fields = queueFields.value
+        .split(",")
+        .map(value => value.trim())
+        .filter(Boolean);
+
+      if (!fields.length) {
+        showMessage("Add at least one field.");
+        return;
+      }
+
+      const button = event.target.querySelector("button[type=submit]");
+      button.disabled = true;
+
+      try {
+        await api("/admin/queues", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: document.getElementById("queueName").value.trim(),
+            fields,
+            unique_field: uniqueField.value,
+            wait_time_estimate: Number(document.getElementById("waitTime").value)
+          })
+        });
+
+        event.target.reset();
+        document.getElementById("waitTime").value = 5;
+        updateUniqueFields();
+
+        showMessage("Queue created successfully.", "success");
+        await loadQueues();
+      } catch (error) {
+        showMessage(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    document.getElementById("saveWaitTimeBtn").addEventListener("click", async () => {
+      if (!state.queue) return;
+
+      try {
+        const waitTime = Number(document.getElementById("panelWaitTime").value);
+
+        const queue = await api(`/admin/queues/${state.queue.id}/wait-time`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wait_time_estimate: waitTime })
+        });
+
+        state.queue = queue;
+        showMessage("Wait time updated.", "success");
+      } catch (error) {
+        showMessage(error.message);
+      }
+    });
+
+    document.getElementById("copyLinkBtn").addEventListener("click", async () => {
+      const link = document.getElementById("joinLink").textContent;
+
+      try {
+        await navigator.clipboard.writeText(link);
+        showMessage("Join link copied.", "success");
+      } catch {
+        showMessage("Could not copy automatically. Copy the link manually.");
+      }
+    });
+
+    document.getElementById("qrBtn").addEventListener("click", () => {
+      const area = document.getElementById("qrArea");
+      area.classList.toggle("hidden");
+
+      if (!area.classList.contains("hidden")) {
+        QRCode.toCanvas(
+          document.getElementById("qrCanvas"),
+          document.getElementById("joinLink").textContent,
+          { width: 260, margin: 2 }
+        );
+      }
+    });
+
+    document.getElementById("refreshBtn").addEventListener("click", loadQueues);
+    document.getElementById("refreshEntriesBtn").addEventListener("click", loadEntries);
+
+    document.getElementById("closePanel").addEventListener("click", () => {
+      document.getElementById("queuePanel").classList.add("hidden");
+      state.queue = null;
+    });
+
+    document.getElementById("logoutBtn").addEventListener("click", () => {
+      localStorage.removeItem(tokenKey);
+      window.location.replace("/");
+    });
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function updateQueueControls() {
+      const open = state.queue && state.queue.is_active;
+      document.getElementById("toggleQueueBtn").textContent = open ? "Close queue" : "Reopen queue";
+    }
+
+    document.getElementById("callNextBtn").addEventListener("click", async () => {
+      if (!state.queue) return;
+      try {
+        await api(`/admin/queues/${state.queue.id}/call-next`, { method: "POST" });
+        await loadEntries(true);
+        showMessage("Next student called.", "success");
+      } catch (error) {
+        showMessage(error.message);
+      }
+    });
+
+    document.getElementById("toggleQueueBtn").addEventListener("click", async () => {
+      if (!state.queue) return;
+      const action = state.queue.is_active ? "close" : "reopen";
+      try {
+        state.queue = await api(`/admin/queues/${state.queue.id}/${action}`, { method: "POST" });
+        updateQueueControls();
+        showMessage(action === "close" ? "Queue closed. New students cannot join." : "Queue reopened.", "success");
+        loadQueues();
+      } catch (error) {
+        showMessage(error.message);
+      }
+    });
+
+    // Polling: refresh the open queue every 5 seconds (only while the tab is visible).
+    setInterval(() => {
+      if (state.queue && !document.hidden) loadEntries(true);
+    }, 5000);
+
+    window.openQueue = openQueue;
+    window.entryAction = entryAction;
+
+    Promise.all([loadMe(), loadQueues()]).catch(error => showMessage(error.message));
+  </script>
+</body>
+</html>

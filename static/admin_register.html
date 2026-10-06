@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Queuer — Register</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-card">
+      <div class="brand">Queuer</div>
+      <h1>Create admin account</h1>
+      <p class="muted">Set up an account to create and manage queues.</p>
+
+      <div id="message" class="message hidden"></div>
+
+      <form id="registerForm">
+        <label>
+          Username
+          <input id="username" type="text" minlength="3" autocomplete="username" required>
+        </label>
+
+        <label>
+          Email
+          <input id="email" type="email" autocomplete="email" required>
+        </label>
+
+        <label id="inviteLabel" class="hidden">
+          Invite code
+          <input id="inviteCode" type="text" autocomplete="off">
+        </label>
+
+        <label>
+          Password
+          <input id="password" type="password" minlength="8" autocomplete="new-password" required>
+        </label>
+
+        <label>
+          Confirm password
+          <input id="confirmPassword" type="password" minlength="8" autocomplete="new-password" required>
+        </label>
+
+        <button class="btn primary full" type="submit">Create account</button>
+      </form>
+
+      <p class="auth-link">
+        Already registered?
+        <a href="/">Back to login</a>
+      </p>
+    </section>
+  </main>
+
+  <script src="/static/config.js"></script>
+  <script>
+    const form = document.getElementById("registerForm");
+    const message = document.getElementById("message");
+
+    // Show the invite-code box only if the server requires one.
+    fetch(QueuerConfig.api("/admin/registration-info"))
+      .then(r => r.json())
+      .then(info => {
+        if (info.invite_required) {
+          document.getElementById("inviteLabel").classList.remove("hidden");
+          document.getElementById("inviteCode").required = true;
+        }
+      })
+      .catch(() => {});
+
+    function showMessage(text, type = "error") {
+      message.textContent = text;
+      message.className = "message " + type;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const password = document.getElementById("password").value;
+      const confirm = document.getElementById("confirmPassword").value;
+
+      if (password !== confirm) {
+        showMessage("Passwords do not match.");
+        return;
+      }
+
+      const button = form.querySelector("button");
+      button.disabled = true;
+      button.textContent = "Creating account...";
+
+      try {
+        const response = await fetch(QueuerConfig.api("/admin/register"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: document.getElementById("username").value.trim(),
+            email: document.getElementById("email").value.trim(),
+            invite_code: document.getElementById("inviteCode").value.trim() || null,
+            password
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(QueuerConfig.errorText(data, "Registration failed"));
+        }
+
+        showMessage("Account created. Redirecting to login...", "success");
+        setTimeout(() => window.location.replace("/"), 900);
+      } catch (error) {
+        showMessage(error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Create account";
+      }
+    });
+  </script>
+</body>
+</html>

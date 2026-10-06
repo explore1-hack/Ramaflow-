@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Queuer — Admin Login</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-card">
+      <div class="brand">Queuer</div>
+      <h1>Admin login</h1>
+      <p class="muted">Sign in to manage your queues.</p>
+
+      <div id="message" class="message hidden"></div>
+
+      <form id="loginForm">
+        <label>
+          Username or email
+          <input id="identifier" type="text" autocomplete="username" required>
+        </label>
+
+        <label>
+          Password
+          <input id="password" type="password" autocomplete="current-password" required>
+        </label>
+
+        <button class="btn primary full" type="submit">Sign in</button>
+      </form>
+
+      <p class="auth-link">
+        Don't have an account?
+        <a href="/register">Create an admin account</a>
+      </p>
+    </section>
+  </main>
+
+  <script src="/static/config.js"></script>
+  <script>
+    if (localStorage.getItem(QueuerConfig.TOKEN_KEY)) {
+      window.location.replace("/dashboard");
+    }
+
+    const form = document.getElementById("loginForm");
+    const message = document.getElementById("message");
+
+    function showMessage(text, type = "error") {
+      message.textContent = text;
+      message.className = "message " + type;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const button = form.querySelector("button");
+      button.disabled = true;
+      button.textContent = "Signing in...";
+
+      try {
+        const response = await fetch(QueuerConfig.api("/admin/login"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identifier: document.getElementById("identifier").value.trim(),
+            password: document.getElementById("password").value
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(QueuerConfig.errorText(data, "Login failed"));
+        }
+
+        localStorage.setItem(QueuerConfig.TOKEN_KEY, data.access_token);
+        window.location.replace("/dashboard");
+      } catch (error) {
+        showMessage(error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Sign in";
+      }
+    });
+  </script>
+</body>
+</html>

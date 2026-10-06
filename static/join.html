@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Queuer — Join Queue</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="public-shell">
+    <section class="card public-card">
+      <div class="brand">Queuer</div>
+      <div id="loading">Loading queue...</div>
+
+      <div id="queueContent" class="hidden">
+        <h1 id="queueName"></h1>
+        <p id="queueDescription" class="muted"></p>
+
+        <div id="message" class="message hidden"></div>
+
+        <form id="joinForm">
+          <div id="fields"></div>
+          <button class="btn primary full" type="submit">Join queue</button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/config.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const queueId = params.get("queue");
+
+    const loading = document.getElementById("loading");
+    const content = document.getElementById("queueContent");
+    const message = document.getElementById("message");
+    const fieldsContainer = document.getElementById("fields");
+    let queue = null;
+
+    function showMessage(text, type = "error") {
+      message.textContent = text;
+      message.className = "message " + type;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    async function loadQueue() {
+      if (!queueId || !/^\d+$/.test(queueId)) {
+        loading.textContent = "Invalid queue link.";
+        return;
+      }
+
+      // Already in this queue from this browser? Go straight back to the status page.
+      try {
+        const saved = localStorage.getItem("queuer_entry_" + queueId);
+        if (saved && /^\d+$/.test(saved)) {
+          window.location.replace(`/status?entry=${saved}`);
+          return;
+        }
+      } catch (e) {}
+
+      try {
+        const response = await fetch(QueuerConfig.api(`/queues/${queueId}`));
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(QueuerConfig.errorText(data, "Queue not found"));
+        }
+
+        queue = data;
+        document.getElementById("queueName").textContent = queue.name;
+        document.getElementById("queueDescription").textContent =
+          `Please enter your details. Required fields: ${queue.fields.join(", ")}.`;
+
+        fieldsContainer.innerHTML = queue.fields.map((field, index) => `
+          <label>
+            ${escapeHtml(field)}
+            <input
+              type="text"
+              name="field_${index}"
+              data-field="${escapeHtml(field)}"
+              autocomplete="off"
+              required
+            >
+          </label>
+        `).join("");
+
+        loading.classList.add("hidden");
+        content.classList.remove("hidden");
+      } catch (error) {
+        loading.textContent = error.message;
+      }
+    }
+
+    document.getElementById("joinForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const data = {};
+      fieldsContainer.querySelectorAll("input").forEach(input => {
+        data[input.dataset.field] = input.value.trim();
+      });
+
+      const button = event.target.querySelector("button");
+      button.disabled = true;
+      button.textContent = "Joining...";
+
+      try {
+        const response = await fetch(QueuerConfig.api(`/queues/${queueId}/join`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(QueuerConfig.errorText(result, "Could not join queue"));
+        }
+
+        try { localStorage.setItem("queuer_entry_" + queueId, String(result.id)); } catch (e) {}
+        window.location.replace(`/status?entry=${result.id}`);
+      } catch (error) {
+        showMessage(error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Join queue";
+      }
+    });
+
+    loadQueue();
+  </script>
+</body>
+</html>

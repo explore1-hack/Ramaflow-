@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Queuer — Queue Status</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="public-shell">
+    <section class="card status-card">
+      <div class="brand">Queuer</div>
+      <p class="muted" id="queueName">Your queue status</p>
+
+      <div id="message" class="message hidden"></div>
+
+      <div id="statusContent">
+        <div class="status-badge" id="statusBadge">Loading...</div>
+
+        <div class="status-number" id="position">—</div>
+        <div class="muted">your position in the waiting line</div>
+
+        <div class="stats">
+          <div class="stat">
+            <strong id="ahead">—</strong>
+            <span>people ahead</span>
+          </div>
+          <div class="stat">
+            <strong id="wait">—</strong>
+            <span>estimated minutes</span>
+          </div>
+        </div>
+
+        <p id="endNote" class="muted hidden"></p>
+        <p id="lastUpdated" class="muted small"></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/config.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const entryId = params.get("entry");
+    let timer = null;
+
+    const badge = document.getElementById("statusBadge");
+    const position = document.getElementById("position");
+    const ahead = document.getElementById("ahead");
+    const wait = document.getElementById("wait");
+    const lastUpdated = document.getElementById("lastUpdated");
+    const message = document.getElementById("message");
+
+    function showMessage(text) {
+      message.textContent = text;
+      message.className = "message error";
+    }
+
+    // Remove the "I'm already in this queue" memory so the student can join again.
+    function forgetEntry() {
+      try {
+        Object.keys(localStorage)
+          .filter(k => k.startsWith("queuer_entry_") && localStorage.getItem(k) === entryId)
+          .forEach(k => localStorage.removeItem(k));
+      } catch (e) {}
+    }
+
+    async function loadStatus() {
+      if (!entryId || !/^\d+$/.test(entryId)) {
+        showMessage("Invalid entry link.");
+        if (timer) clearInterval(timer);
+        return;
+      }
+
+      try {
+        const response = await fetch(
+          QueuerConfig.api(`/entries/${entryId}/status`)
+        );
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(QueuerConfig.errorText(data, "Could not load status"));
+        }
+
+        badge.textContent = data.status;
+        badge.className = `status-badge ${data.status}`;
+
+        if (data.status === "waiting") {
+          position.textContent = data.position_in_queue;
+          ahead.textContent = data.people_ahead;
+          wait.textContent = data.estimated_wait_minutes;
+        } else if (data.status === "called") {
+          position.textContent = "NOW";
+          ahead.textContent = "0";
+          wait.textContent = "0";
+        } else {
+          const text = {
+            done: ["Done", "You have been served. Thank you!"],
+            skipped: ["Skipped", "You were skipped. Please ask the teacher, or join the queue again."],
+            noshow: ["Missed", "You were marked as not present. You can join the queue again."]
+          }[data.status] || ["—", ""];
+          position.textContent = text[0];
+          ahead.textContent = "—";
+          wait.textContent = "—";
+          const note = document.getElementById("endNote");
+          note.innerHTML = `${text[1]} <a href="/join?queue=${data.queue_id}">Join again</a>`;
+          note.classList.remove("hidden");
+          forgetEntry();
+          if (timer) clearInterval(timer);
+        }
+        document.getElementById("queueName").textContent = data.queue_name;
+        document.title = data.status === "called" ? "Your turn! — Queuer" : "Queuer — Queue Status";
+
+        lastUpdated.textContent =
+          `Last updated ${new Date().toLocaleTimeString()}`;
+      } catch (error) {
+        showMessage(error.message);
+        if (error.message.toLowerCase().includes("not found")) {
+          forgetEntry();
+          if (timer) clearInterval(timer);
+        }
+      }
+    }
+
+    loadStatus();
+    timer = setInterval(loadStatus, 5000);
+  </script>
+</body>
+</html>

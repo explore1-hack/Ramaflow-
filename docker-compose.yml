@@ -1,0 +1,22 @@
+# Local production-like run:  docker compose up --build   ->  http://localhost:8000
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: queuer
+      POSTGRES_PASSWORD: queuer
+      POSTGRES_DB: queuer
+    ports: ["5432:5432"]          # lets you run the tests against it from your machine
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U queuer"]
+      interval: 3s
+      retries: 20
+  web:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql://queuer:queuer@db:5432/queuer
+      SECRET_KEY: local-compose-secret-change-me-0123456789abcdef
+      APP_ENV: production
+    ports: ["8000:8000"]
