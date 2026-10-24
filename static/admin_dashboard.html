@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -582,6 +582,695 @@
       printWindow.document.open();
       printWindow.document.write(html);
       printWindow.document.close();
+    });
+
+    // ------------------------------------------------------------
+    // Export CSV
+    // ------------------------------------------------------------
+    $("exportCsvBtn").addEventListener("click", (event) => {
+      if (!state.queue) return;
+      const queueId = state.queue.id; // capture now; state may change while downloading
+
+      withButton(event.currentTarget, async () => {
+        try {
+          const response = await fetch(QueuerConfig.api(`/admin/queues/${queueId}/export`), {
+            headers: { Authorization: `Bearer ${localStorage.getItem(tokenKey)}` }
+          });
+
+          if (response.status === 401) { forceLogin(); return; }
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(errorText(data, "Failed to export report"));
+          }
+
+          const blob = await response.blob();
+          const downloadUrl = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = downloadUrl;
+          a.download = `queue_${queueId}_report.csv`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+          showMessage("Report downloaded successfully.", "success");
+        } catch (error) {
+          showMessage(error.message || "Failed to export report");
+        }
+      });
+    });
+
+    // ------------------------------------------------------------
+    // Misc controls
+    // ------------------------------------------------------------
+    $("refreshBtn").addEventListener("click", loadQueues);
+    $("refreshEntriesBtn").addEventListener("click", () => loadEntries(false));
+
+    $("closePanel").addEventListener("click", () => {
+      $("queuePanel").classList.add("hidden");
+      state.queue = null;
+    });
+
+    $("logoutBtn").addEventListener("click", forceLogin);
+
+    // Poll the open queue every 5 seconds, only while the tab is visible.
+    setInterval(() => {
+      if (state.queue && !document.hidden) loadEntries(true);
+    }, 5000);
+
+    // Refresh immediately when the admin comes back to the tab.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && state.queue) loadEntries(true);
+    });
+
+    Promise.all([loadMe(), loadQueues()]).catch(error => showMessage(error.message));
+  </script>
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Queuer — Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="brand">Queuer</div>
+      <div id="welcome" class="muted small"></div>
+    </div>
+    <button id="logoutBtn" class="btn secondary">Log out</button>
+  </header>
+
+  <main class="container">
+    <div id="message" class="message hidden" role="status" aria-live="polite"></div>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>Create a queue</h2>
+        <p class="muted">Define the fields students must provide.</p>
+
+        <form id="queueForm">
+          <label>
+            Queue name
+            <input id="queueName" type="text" placeholder="e.g. Office Hours" required>
+          </label>
+
+          <label>
+            Fields
+            <input id="queueFields" type="text" placeholder="Name, Roll No." required>
+          </label>
+
+          <label>
+            Unique field
+            <select id="uniqueField" required>
+              <option value="">Enter fields first</option>
+            </select>
+          </label>
+
+          <label>
+            Estimated minutes per person
+            <input id="waitTime" type="number" min="1" value="5" required>
+          </label>
+
+          <button class="btn primary full" type="submit">Create queue</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>How it works</h2>
+        <ol class="steps">
+          <li>Create a queue and choose its unique field.</li>
+          <li>Share the generated join link or QR code.</li>
+          <li>Students join from their phones.</li>
+          <li>Call, complete, skip, or recall entries here.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <h2>Your queues</h2>
+          <p class="muted">Select a queue to view and manage its entries.</p>
+        </div>
+        <button id="refreshBtn" class="btn secondary">Refresh</button>
+      </div>
+
+      <div id="queues" class="queue-list"></div>
+    </section>
+
+    <section id="queuePanel" class="card hidden">
+      <div class="section-heading">
+        <div>
+          <h2 id="selectedQueueName">Queue</h2>
+          <p id="selectedQueueMeta" class="muted"></p>
+        </div>
+        <div class="button-row">
+          <button id="exportCsvBtn" class="btn secondary">Export CSV</button>
+          <button id="closePanel" class="btn secondary">Close</button>
+        </div>
+      </div>
+
+      <div class="share-box">
+        <div>
+          <strong>Student join link</strong>
+          <div id="joinLink" class="code-text"></div>
+        </div>
+        <div class="button-row">
+          <button id="copyLinkBtn" class="btn secondary">Copy link</button>
+          <button id="qrBtn" class="btn primary">Show QR</button>
+        </div>
+      </div>
+
+      <div id="qrArea" class="qr-area hidden">
+        <canvas id="qrCanvas"></canvas>
+        <div class="button-row" style="margin-top: 12px; justify-content: center;">
+          <button id="downloadQrBtn" class="btn primary">Download PNG</button>
+          <button id="printQrBtn" class="btn secondary">Print QR Code</button>
+        </div>
+      </div>
+
+      <div class="button-row" style="margin-bottom:18px">
+        <button id="callNextBtn" class="btn primary">Call next</button>
+        <button id="toggleQueueBtn" class="btn secondary">Close queue</button>
+        <span id="queueStats" class="muted small"></span>
+      </div>
+
+      <div class="wait-time-row">
+        <label>
+          Wait time per person (minutes)
+          <input id="panelWaitTime" type="number" min="1">
+        </label>
+        <button id="saveWaitTimeBtn" class="btn secondary">Save wait time</button>
+      </div>
+
+      <div class="section-heading">
+        <div>
+          <h3>Entries</h3>
+          <p class="muted">Refreshes automatically every 5 seconds.</p>
+        </div>
+        <button id="refreshEntriesBtn" class="btn secondary">Refresh entries</button>
+      </div>
+
+      <div id="entries" class="entries"></div>
+    </section>
+  </main>
+
+  <script src="/static/config.js"></script>
+  <!-- Self-hosted QR library (qrcode@1.5.4 has no CDN build). Put qrcode.min.js in your /static folder. -->
+  <script src="/static/qrcode.min.js"></script>
+  <script>
+    "use strict";
+
+    const tokenKey = QueuerConfig.TOKEN_KEY;
+
+    if (!localStorage.getItem(tokenKey)) {
+      window.location.replace("/");
+    }
+
+    const state = { queue: null, queues: [], loadingEntries: false };
+
+    const $ = (id) => document.getElementById(id);
+    const message = $("message");
+    const queueFields = $("queueFields");
+    const uniqueField = $("uniqueField");
+
+    // ------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    let messageTimer = null;
+    function showMessage(text, type = "error") {
+      message.textContent = text;
+      message.className = "message " + type;
+      clearTimeout(messageTimer);
+      messageTimer = setTimeout(() => message.classList.add("hidden"), type === "success" ? 4000 : 8000);
+    }
+
+    // Turns FastAPI's error shapes (string OR array of objects) into readable text.
+    function errorText(data, fallback = "Request failed") {
+      if (typeof QueuerConfig.errorText === "function") {
+        try { return QueuerConfig.errorText(data, fallback); } catch (_) { /* fall through */ }
+      }
+      const d = data && data.detail;
+      if (typeof d === "string") return d;
+      if (Array.isArray(d)) {
+        return d.map(x => (x && x.msg) ? x.msg : String(x)).join("; ") || fallback;
+      }
+      return fallback;
+    }
+
+    function forceLogin() {
+      localStorage.removeItem(tokenKey);
+      window.location.replace("/");
+    }
+
+    async function api(path, options = {}) {
+      const headers = {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${localStorage.getItem(tokenKey)}`
+      };
+
+      let response;
+      try {
+        response = await fetch(QueuerConfig.api(path), { ...options, headers });
+      } catch (_) {
+        throw new Error("Network problem. Check your connection and try again.");
+      }
+
+      if (response.status === 401) {
+        forceLogin();
+        throw new Error("Session expired");
+      }
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(errorText(data, "Request failed"));
+      }
+      return data;
+    }
+
+    // Single source of truth for parsing the "Fields" input (trim, drop empties, dedupe).
+    function parseFields(raw) {
+      return [...new Set(raw.split(",").map(v => v.trim()).filter(Boolean))];
+    }
+
+    // Run an async action while a button is disabled (prevents double clicks).
+    async function withButton(button, fn) {
+      if (button) {
+        if (button.disabled) return;
+        button.disabled = true;
+      }
+      try { return await fn(); }
+      finally { if (button) button.disabled = false; }
+    }
+
+    // ------------------------------------------------------------
+    // Create-queue form
+    // ------------------------------------------------------------
+    function updateUniqueFields() {
+      const fields = parseFields(queueFields.value);
+      const previous = uniqueField.value;
+      uniqueField.innerHTML = "";
+
+      if (!fields.length) {
+        uniqueField.innerHTML = '<option value="">Enter fields first</option>';
+        return;
+      }
+
+      fields.forEach(field => {
+        const option = document.createElement("option");
+        option.value = field;
+        option.textContent = field;
+        uniqueField.appendChild(option);
+      });
+
+      if (fields.includes(previous)) uniqueField.value = previous;
+    }
+
+    queueFields.addEventListener("input", updateUniqueFields);
+
+    $("queueForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const fields = parseFields(queueFields.value);
+      if (!fields.length) {
+        showMessage("Add at least one field.");
+        return;
+      }
+      if (!fields.includes(uniqueField.value)) {
+        showMessage("Choose a unique field.");
+        return;
+      }
+
+      const waitTime = Number($("waitTime").value);
+      if (!Number.isFinite(waitTime) || waitTime < 1) {
+        showMessage("Wait time must be at least 1 minute.");
+        return;
+      }
+
+      const form = event.target;
+      const button = form.querySelector("button[type=submit]");
+
+      await withButton(button, async () => {
+        try {
+          await api("/admin/queues", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: $("queueName").value.trim(),
+              fields,
+              unique_field: uniqueField.value,
+              wait_time_estimate: Math.round(waitTime)
+            })
+          });
+
+          form.reset();
+          $("waitTime").value = 5;
+          updateUniqueFields();
+
+          showMessage("Queue created successfully.", "success");
+          await loadQueues();
+        } catch (error) {
+          showMessage(error.message);
+        }
+      });
+    });
+
+    // ------------------------------------------------------------
+    // Account + queue list
+    // ------------------------------------------------------------
+    async function loadMe() {
+      const me = await api("/admin/me");
+      $("welcome").textContent = `Signed in as ${me.username} · ${me.email}`;
+    }
+
+    async function loadQueues() {
+      const container = $("queues");
+      container.innerHTML = '<div class="empty">Loading queues...</div>';
+
+      try {
+        state.queues = await api("/admin/queues");
+
+        if (!state.queues.length) {
+          container.innerHTML = '<div class="empty">No queues yet. Create your first queue above.</div>';
+          return;
+        }
+
+        container.innerHTML = state.queues.map(queue => `
+          <article class="queue-card">
+            <div>
+              <h3>${escapeHtml(queue.name)}</h3>
+              <p class="muted">${(queue.fields || []).map(f => escapeHtml(f)).join(", ")}</p>
+              <span class="badge ${queue.is_active ? "" : "closed"}">${queue.is_active ? "Open" : "Closed"}</span>
+            </div>
+            <div class="button-row">
+              <button class="btn secondary" data-open-queue="${Number(queue.id)}">Manage</button>
+            </div>
+          </article>
+        `).join("");
+      } catch (error) {
+        container.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    // Event delegation: no inline onclick, no globals needed.
+    $("queues").addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-open-queue]");
+      if (btn) openQueue(Number(btn.dataset.openQueue));
+    });
+
+    // ------------------------------------------------------------
+    // Queue panel
+    // ------------------------------------------------------------
+    function updateQueueControls() {
+      const open = state.queue && state.queue.is_active;
+      $("toggleQueueBtn").textContent = open ? "Close queue" : "Reopen queue";
+    }
+
+    async function openQueue(queueId) {
+      try {
+        const queue = await api(`/admin/queues/${queueId}`);
+        state.queue = queue;
+
+        $("queuePanel").classList.remove("hidden");
+        $("selectedQueueName").textContent = queue.name;
+        $("selectedQueueMeta").textContent =
+          `Required fields: ${(queue.fields || []).join(", ")} · Unique field: ${queue.unique_field}`;
+
+        $("panelWaitTime").value = queue.wait_time_estimate;
+        updateQueueControls();
+
+        $("joinLink").textContent = `${window.location.origin}/join?queue=${queue.id}`;
+        $("qrArea").classList.add("hidden");
+        $("qrBtn").textContent = "Show QR";
+
+        await loadEntries();
+        $("queuePanel").scrollIntoView({ behavior: "smooth" });
+      } catch (error) {
+        showMessage(error.message);
+      }
+    }
+
+    function entryRow(entry) {
+      const details = Object.entries(entry.data || {})
+        .map(([key, value]) => `<span><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</span>`)
+        .join("");
+
+      const id = Number(entry.id);
+      const btn = (cls, action, label) =>
+        `<button class="btn small-btn ${cls}" data-entry="${id}" data-action="${action}">${label}</button>`;
+
+      let actionButtons;
+      if (entry.status === "waiting") {
+        actionButtons = btn("primary", "call", "Call") + btn("warning", "skip", "Skip") + btn("danger", "noshow", "No-show");
+      } else if (entry.status === "called") {
+        actionButtons = btn("primary", "done", "Done") + btn("warning", "skip", "Skip") + btn("danger", "noshow", "No-show");
+      } else {
+        actionButtons = btn("secondary", "recall", "Recall");
+      }
+
+      return `
+        <article class="entry-row">
+          <div class="entry-number">#${escapeHtml(entry.position)}</div>
+          <div class="entry-main">
+            <div class="entry-details">${details}</div>
+            <div class="entry-status ${escapeHtml(entry.status)}">${escapeHtml(entry.status)}</div>
+          </div>
+          <div class="button-row entry-actions">${actionButtons}</div>
+        </article>
+      `;
+    }
+
+    async function loadEntries(silent = false) {
+      if (!state.queue) return;
+      silent = silent === true;
+
+      // Don't stack requests if the server is slow.
+      if (state.loadingEntries) return;
+      state.loadingEntries = true;
+
+      const queueId = state.queue.id;
+      const container = $("entries");
+      if (!silent) container.innerHTML = '<div class="empty">Loading entries...</div>';
+
+      try {
+        const entries = await api(`/admin/queues/${queueId}/entries`);
+
+        // The admin may have closed this panel or switched queues while we waited.
+        if (!state.queue || state.queue.id !== queueId) return;
+
+        const active = entries
+          .filter(e => e.status === "waiting" || e.status === "called")
+          .sort((a, b) =>
+            (a.status === "called" ? 0 : 1) - (b.status === "called" ? 0 : 1) || a.position - b.position);
+        const history = entries.filter(e => e.status !== "waiting" && e.status !== "called").reverse();
+        const calledCount = active.filter(e => e.status === "called").length;
+
+        $("queueStats").textContent =
+          `${active.length - calledCount} waiting · ${calledCount} being served · ${history.length} finished`;
+
+        if (!entries.length) {
+          container.innerHTML = '<div class="empty">No students have joined this queue yet.</div>';
+          return;
+        }
+
+        container.innerHTML =
+          `<h3>Active (${active.length})</h3>` +
+          (active.length ? active.map(entryRow).join("") : '<div class="empty">Nobody is waiting.</div>') +
+          (history.length
+            ? `<h3 style="margin-top:18px">History (${history.length})</h3>` + history.map(entryRow).join("")
+            : "");
+      } catch (error) {
+        if (!silent) container.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      } finally {
+        state.loadingEntries = false;
+      }
+    }
+
+    async function entryAction(entryId, action, button) {
+      await withButton(button, async () => {
+        try {
+          await api(`/admin/entries/${entryId}/${action}`, { method: "POST" });
+          await loadEntries(true);
+          showMessage(`Entry ${action} successful.`, "success");
+        } catch (error) {
+          showMessage(error.message);
+          loadEntries(true); // state may have changed under us; resync quietly
+        }
+      });
+    }
+
+    $("entries").addEventListener("click", (event) => {
+      const btn = event.target.closest("button[data-entry]");
+      if (btn) entryAction(Number(btn.dataset.entry), btn.dataset.action, btn);
+    });
+
+    $("callNextBtn").addEventListener("click", (event) => {
+      if (!state.queue) return;
+      withButton(event.currentTarget, async () => {
+        try {
+          await api(`/admin/queues/${state.queue.id}/call-next`, { method: "POST" });
+          await loadEntries(true);
+          showMessage("Next student called.", "success");
+        } catch (error) {
+          showMessage(error.message);
+          loadEntries(true);
+        }
+      });
+    });
+
+    $("toggleQueueBtn").addEventListener("click", (event) => {
+      if (!state.queue) return;
+      const action = state.queue.is_active ? "close" : "reopen";
+      withButton(event.currentTarget, async () => {
+        try {
+          state.queue = await api(`/admin/queues/${state.queue.id}/${action}`, { method: "POST" });
+          updateQueueControls();
+          showMessage(action === "close" ? "Queue closed. New students cannot join." : "Queue reopened.", "success");
+          loadQueues();
+        } catch (error) {
+          showMessage(error.message);
+        }
+      });
+    });
+
+    $("saveWaitTimeBtn").addEventListener("click", (event) => {
+      if (!state.queue) return;
+
+      const waitTime = Number($("panelWaitTime").value);
+      if (!Number.isFinite(waitTime) || waitTime < 1) {
+        showMessage("Wait time must be at least 1 minute.");
+        return;
+      }
+
+      withButton(event.currentTarget, async () => {
+        try {
+          state.queue = await api(`/admin/queues/${state.queue.id}/wait-time`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ wait_time_estimate: Math.round(waitTime) })
+          });
+          showMessage("Wait time updated.", "success");
+        } catch (error) {
+          showMessage(error.message);
+        }
+      });
+    });
+
+    // ------------------------------------------------------------
+    // Share: copy link, QR, print
+    // ------------------------------------------------------------
+    $("copyLinkBtn").addEventListener("click", async () => {
+      const link = $("joinLink").textContent;
+      try {
+        await navigator.clipboard.writeText(link);
+        showMessage("Join link copied.", "success");
+      } catch (_) {
+        showMessage("Could not copy automatically. Copy the link manually.");
+      }
+    });
+
+    function qrReady() {
+      if (typeof QRCode === "undefined" || typeof QRCode.toCanvas !== "function") {
+        showMessage("QR library failed to load. Make sure /static/qrcode.min.js exists on your server.");
+        return false;
+      }
+      return true;
+    }
+
+    function drawQr() {
+      if (!qrReady()) return;
+      const link = $("joinLink").textContent;
+      QRCode.toCanvas($("qrCanvas"), link, { width: 260, margin: 2 }, (error) => {
+        if (error) {
+          console.error("QR Code generation failed:", error);
+          showMessage("Could not generate the QR code.");
+        }
+      });
+    }
+
+    $("qrBtn").addEventListener("click", () => {
+      const area = $("qrArea");
+      area.classList.toggle("hidden");
+      $("qrBtn").textContent = area.classList.contains("hidden") ? "Show QR" : "Hide QR";
+      if (!area.classList.contains("hidden")) drawQr();
+    });
+
+    // High-resolution PNG as a data URL (sharper than the on-screen canvas).
+    function qrPngDataUrl() {
+      return QRCode.toDataURL($("joinLink").textContent, { width: 800, margin: 3 });
+    }
+
+    function safeFileName(text) {
+      return (text || "queue").replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() || "queue";
+    }
+
+    $("downloadQrBtn").addEventListener("click", async () => {
+      if (!qrReady()) return;
+      try {
+        const dataUrl = await qrPngDataUrl();
+        const a = document.createElement("a");
+        a.href = dataUrl;
+        a.download = `qr_${safeFileName($("selectedQueueName").textContent)}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        showMessage("QR code downloaded.", "success");
+      } catch (error) {
+        showMessage("Could not create the QR image.");
+      }
+    });
+
+    // Prints through a hidden iframe, so pop-up blockers can't stop it.
+    $("printQrBtn").addEventListener("click", async () => {
+      if (!qrReady()) return;
+
+      let dataUrl;
+      try { dataUrl = await qrPngDataUrl(); }
+      catch (_) { showMessage("Could not create the QR image."); return; }
+
+      const queueName = $("selectedQueueName").textContent;
+      const joinLink = $("joinLink").textContent;
+
+      const iframe = document.createElement("iframe");
+      iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentWindow.document;
+      doc.open();
+      doc.write(
+        "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>QR - " + escapeHtml(queueName) + "</title>" +
+        "<style>body{font-family:sans-serif;text-align:center;padding:40px}" +
+        "h2{margin-bottom:6px;color:#111;font-size:28px}" +
+        "p{color:#555;word-break:break-all;margin:0 0 24px;font-size:14px}" +
+        "img{width:360px;max-width:100%;height:auto}</style></head><body>" +
+        "<h2>" + escapeHtml(queueName) + "</h2>" +
+        "<p>Scan to join the queue</p>" +
+        "<img id=\"q\" src=\"" + dataUrl + "\" alt=\"QR code\">" +
+        "<p style=\"margin-top:20px\">" + escapeHtml(joinLink) + "</p>" +
+        "</body></html>"
+      );
+      doc.close();
+
+      const img = doc.getElementById("q");
+      const go = () => {
+        try { iframe.contentWindow.focus(); iframe.contentWindow.print(); }
+        finally { setTimeout(() => iframe.remove(), 2000); }
+      };
+      if (img.complete) go(); else img.onload = go;
     });
 
     // ------------------------------------------------------------
