@@ -186,6 +186,48 @@ def list_entries(queue_id: int, db: Session = Depends(get_db), current_admin: mo
         .all()
     )
 
+@router.get("/queues/{queue_id}/export")
+def export_queue_entries(
+    queue_id: int,
+    db: Session = Depends(get_db),
+    current_admin: models.Admin = Depends(auth.get_current_admin),
+):
+    queue = _get_owned_queue(db, queue_id, current_admin)
+    entries = (
+        db.query(models.Entry)
+        .filter(models.Entry.queue_id == queue_id)
+        .order_by(models.Entry.position.asc())
+        .all()
+    )
+
+    output = StringIO()
+    writer = csv.writer(output)
+
+    # Base audit headers + all dynamic student fields (e.g., Name, Roll No.)
+    base_headers = ["Position", "Status", "Joined At", "Called At"]
+    custom_fields = queue.fields
+    writer.writerow(base_headers + custom_fields)
+
+    for entry in entries:
+        row = [
+            entry.position,
+            entry.status.value if hasattr(entry.status, "value") else entry.status,
+            entry.created_at.strftime("%Y-%m-%d %H:%M:%S") if entry.created_at else "",
+            entry.called_at.strftime("%Y-%m-%d %H:%M:%S") if entry.called_at else "",
+        ]
+        data = entry.data or {}
+        for field in custom_fields:
+            row.append(data.get(field, ""))
+        writer.writerow(row)
+
+    output.seek(0)
+    filename = f"queue_{queue_id}_report.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
 
 # ---------------------------------------------------------------------
 # Entry actions
