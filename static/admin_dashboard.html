@@ -476,7 +476,6 @@
 </body>
 </html> -->
 
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -881,7 +880,7 @@
       }
     });
 
-    // Fixed QR code loading with sizing timeout
+    // QR Code Display with Canvas Sizing Timeout
     document.getElementById("qrBtn").addEventListener("click", () => {
       const area = document.getElementById("qrArea");
       area.classList.toggle("hidden");
@@ -900,7 +899,7 @@
       }
     });
 
-    // Print QR code functionality
+    // Print QR Code functionality
     document.getElementById("printQrBtn").addEventListener("click", () => {
       const canvas = document.getElementById("qrCanvas");
       const dataUrl = canvas.toDataURL("image/png");
@@ -908,30 +907,19 @@
       const joinLink = document.getElementById("joinLink").textContent;
 
       const printWindow = window.open("", "_blank");
-      printWindow.document.write(`
-        <html>
-          <head>
-            <title>Print QR - ${escapeHtml(queueName)}</title>
-            <style>
-              body { font-family: sans-serif; text-align: center; padding: 40px; }
-              h2 { margin-bottom: 5px; color: #111; }
-              p { color: #555; word-break: break-all; margin-bottom: 25px; font-size: 14px; }
-              img { max-width: 280px; height: auto; border: 1px solid #ddd; padding: 12px; border-radius: 8px; }
-            </style>
-          </head>
-          <body>
-            <h2>${escapeHtml(queueName)}</h2>
-            <p>${escapeHtml(joinLink)}</p>
-            <img src="${dataUrl}" />
-            <script>
-              window.onload = function() {
-                window.print();
-                window.close();
-              };
-            </script>
-          </body>
-        </html>
-      `);
+      printWindow.document.write(
+        "<html><head><title>Print QR - " + escapeHtml(queueName) + "</title>" +
+        "<style>body { font-family: sans-serif; text-align: center; padding: 40px; }" +
+        "h2 { margin-bottom: 5px; color: #111; }" +
+        "p { color: #555; word-break: break-all; margin-bottom: 25px; font-size: 14px; }" +
+        "img { max-width: 280px; height: auto; border: 1px solid #ddd; padding: 12px; border-radius: 8px; }</style>" +
+        "</head><body>" +
+        "<h2>" + escapeHtml(queueName) + "</h2>" +
+        "<p>" + escapeHtml(joinLink) + "</p>" +
+        '<img src="' + dataUrl + '" />' +
+        "<script>window.onload = function() { window.print(); window.close(); };</script>" +
+        "</body></html>"
+      );
       printWindow.document.close();
     });
 
