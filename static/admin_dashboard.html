@@ -97,7 +97,8 @@
       </div>
 
       <div id="qrArea" class="qr-area hidden">
-        <canvas id="qrCanvas"></canvas>
+        <img id="qrImage" alt="QR code to join this queue" width="260" height="260"
+             style="display:block;margin:0 auto;max-width:100%;height:auto;background:#fff">
         <div class="button-row" style="margin-top: 12px; justify-content: center;">
           <button id="downloadQrBtn" class="btn primary">Download PNG</button>
           <button id="printQrBtn" class="btn secondary">Print QR Code</button>
@@ -130,10 +131,9 @@
     </section>
   </main>
 
-  <!-- All three files live in your /static folder -->
+  <!-- Both files live in your /static folder -->
   <script src="/static/config.js"></script>
   <script src="/static/presets.js"></script>
-  <script src="/static/qrcode.min.js"></script>
   <script>
     "use strict";
 
@@ -389,6 +389,7 @@
         $("joinLink").textContent = `${window.location.origin}/join?queue=${queue.id}`;
         $("qrArea").classList.add("hidden");
         $("qrBtn").textContent = "Show QR";
+        qrDataUrl = null;
 
         await loadEntries();
         $("queuePanel").scrollIntoView({ behavior: "smooth" });
@@ -555,63 +556,71 @@
       }
     });
 
-    function qrReady() {
-      if (typeof QRCode === "undefined" || typeof QRCode.toCanvas !== "function") {
-        showMessage("QR library failed to load. Make sure /static/qrcode.min.js exists on your server.");
-        return false;
-      }
-      return true;
-    }
+    // The server draws the QR (GET /admin/queues/{id}/qr). We just fetch it and show it.
+    let qrDataUrl = null;   // PNG as a data URL; used for display, download and print
 
-    function drawQr() {
-      if (!qrReady()) return;
-      QRCode.toCanvas($("qrCanvas"), $("joinLink").textContent, { width: 260, margin: 2 }, (error) => {
-        if (error) {
-          console.error("QR Code generation failed:", error);
-          showMessage("Could not generate the QR code.");
-        }
+    function blobToDataUrl(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Could not read the QR image."));
+        reader.readAsDataURL(blob);
       });
     }
 
-    $("qrBtn").addEventListener("click", () => {
+    async function loadQr() {
+      if (qrDataUrl) return qrDataUrl;
+      const queueId = state.queue.id;
+
+      const response = await fetch(QueuerConfig.api(`/admin/queues/${queueId}/qr`), {
+        headers: { Authorization: `Bearer ${localStorage.getItem(tokenKey)}` }
+      });
+      if (response.status === 401) { forceLogin(); throw new Error("Session expired"); }
+      if (!response.ok) throw new Error("Could not load the QR code.");
+
+      const dataUrl = await blobToDataUrl(await response.blob());
+      if (state.queue && state.queue.id === queueId) qrDataUrl = dataUrl;
+      return dataUrl;
+    }
+
+    $("qrBtn").addEventListener("click", async () => {
+      if (!state.queue) return;
       const area = $("qrArea");
-      area.classList.toggle("hidden");
-      $("qrBtn").textContent = area.classList.contains("hidden") ? "Show QR" : "Hide QR";
-      if (!area.classList.contains("hidden")) drawQr();
+
+      if (!area.classList.contains("hidden")) {      // already visible -> hide
+        area.classList.add("hidden");
+        $("qrBtn").textContent = "Show QR";
+        return;
+      }
+
+      try {
+        $("qrImage").src = await loadQr();
+        area.classList.remove("hidden");
+        $("qrBtn").textContent = "Hide QR";
+      } catch (error) {
+        showMessage(error.message);
+      }
     });
 
-    // High-resolution PNG (sharper than the on-screen canvas)
-    function qrPngDataUrl() {
-      return QRCode.toDataURL($("joinLink").textContent, { width: 800, margin: 3 });
-    }
-
-    function safeFileName(text) {
-      return (text || "queue").replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() || "queue";
-    }
-
     $("downloadQrBtn").addEventListener("click", async () => {
-      if (!qrReady()) return;
       try {
-        const dataUrl = await qrPngDataUrl();
         const a = document.createElement("a");
-        a.href = dataUrl;
-        a.download = `qr_${safeFileName($("selectedQueueName").textContent)}.png`;
+        a.href = await loadQr();
+        a.download = `qr_${state.queue.id}.png`;
         document.body.appendChild(a);
         a.click();
         a.remove();
         showMessage("QR code downloaded.", "success");
-      } catch (_) {
-        showMessage("Could not create the QR image.");
+      } catch (error) {
+        showMessage(error.message);
       }
     });
 
     // Prints through a hidden iframe, so pop-up blockers can't stop it.
     $("printQrBtn").addEventListener("click", async () => {
-      if (!qrReady()) return;
-
       let dataUrl;
-      try { dataUrl = await qrPngDataUrl(); }
-      catch (_) { showMessage("Could not create the QR image."); return; }
+      try { dataUrl = await loadQr(); }
+      catch (error) { showMessage(error.message); return; }
 
       const queueName = $("selectedQueueName").textContent;
       const joinLink = $("joinLink").textContent;
