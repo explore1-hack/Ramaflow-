@@ -1,11 +1,13 @@
 import csv
 import hmac
 import os
-from io import StringIO
+from io import BytesIO, StringIO
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+import qrcode
+from qrcode.constants import ERROR_CORRECT_M
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -267,6 +269,31 @@ def export_queue_entries(
         iter([output.getvalue()]),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/queues/{queue_id}/qr")
+def queue_qr(
+    queue_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_admin: models.Admin = Depends(auth.get_current_admin),
+):
+    """PNG QR code that points students to this queue's join page."""
+    queue = _get_owned_queue(db, queue_id, current_admin)
+
+    # Behind a proxy/HTTPS, set PUBLIC_BASE_URL (e.g. https://queuer.myschool.com) so the link is exact.
+    base = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/") or str(request.base_url).rstrip("/")
+    join_url = f"{base}/join?queue={queue.id}"
+
+    image = qrcode.make(join_url, error_correction=ERROR_CORRECT_M, box_size=12, border=3)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
     )
 
 
